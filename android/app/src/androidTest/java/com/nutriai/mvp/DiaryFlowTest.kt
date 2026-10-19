@@ -64,9 +64,11 @@ class DiaryFlowTest {
         awaitText("Что вы ели?")
         compose.onNode(hasText("Аналитика") and hasClickAction()).performClick()
         awaitText("247 / 2370 ккал")
-        compose.onNodeWithText("Удалить").performScrollTo().performClick()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Удалить"))
+        compose.onNodeWithText("Удалить").performClick()
         awaitText("Удалить запись?")
         compose.onNodeWithText("Да, удалить").performClick()
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
         awaitText("0 / 2370 ккал")
     }
     @Test fun localCatalogDraftIsRestoredAndWritesAreIdempotent() {
