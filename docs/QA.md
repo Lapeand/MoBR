@@ -29,7 +29,7 @@ Docker Compose с PostgreSQL / MinIO, внешний HTTPS/VPS, настоящи
 
 ## Результат локального прогона 19.10.2026
 
-- Python 3.12: **6 тестов прошли**, один deprecation warning в тестовой инфраструктуре Starlette/AnyIO.
+- Python 3.12: **6 тестов прошли**, один deprecation warning о будущем переходе тестового клиента Starlette с httpx на httpx2.
 - Alembic: `upgrade head` и `check` прошли, расхождений схемы нет.
 - Android JDK 17 / compileSdk 35: APK собран, **2 unit-теста прошли**, lint без ошибок (есть предупреждения об обновлении зависимостей, target API и стиле старых Preview).
 - Эмулятор Android 17 / API 37: **1 сквозной тест прошёл**, включая сохранение блюда на реальном локальном API и восстановление после `Activity.recreate()`.
