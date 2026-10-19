@@ -33,7 +33,7 @@ private class LegacySecureStore(context: Context) {
     fun clear() { check(prefs.edit().clear().commit()) }
 }
 
-/** The only data source used by the Android application. No HTTP client or account. */
+/** Local source of truth for the diary. The optional AI never writes to this database directly. */
 class Repository(private val context: Context) : SQLiteOpenHelper(context, "nutriai_local.db", null, 1) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")

@@ -1,6 +1,7 @@
 .gradle/
 **/build/
 local.properties
+openrouter.properties
 .env
 .venv/
 __pycache__/

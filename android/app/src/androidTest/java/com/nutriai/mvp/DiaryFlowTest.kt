@@ -1,8 +1,6 @@
 package com.nutriai.mvp
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -24,6 +22,7 @@ class DiaryFlowTest {
         context.deleteDatabase("nutriai_local.db")
         context.getSharedPreferences("nutriai_secure",Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("nutriai_config",Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("nutriai_ai",Context.MODE_PRIVATE).edit().clear().putBoolean("enabled",false).commit()
         scenario=ActivityScenario.launch(MainActivity::class.java)
     }
     @After fun close() { scenario.close() }
@@ -41,8 +40,60 @@ class DiaryFlowTest {
         awaitText("Что вы ели?")
         compose.waitUntil(15_000) { compose.onAllNodes(hasText("Что вы ели?") and isEnabled()).fetchSemanticsNodes().isNotEmpty() }
     }
+    /** Opt-in only: -Pandroid.testInstrumentationRunnerArguments.liveOpenRouter=true */
+    @Test fun liveAiParsesNaturalLanguageThenAndroidCalculatesAndStores() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("liveOpenRouter")=="true")
+        setupProfile()
+        lateinit var vm: NutriViewModel
+        scenario.onActivity { activity ->
+            vm=androidx.lifecycle.ViewModelProvider(activity)[NutriViewModel::class.java]
+            vm.enableAi(true)
+        }
+        compose.waitUntil(15_000) { !vm.state.busy && vm.state.aiEnabled }
+        compose.onNodeWithText("Что вы ели?").performTextInput("На обед съел тарелку борща 300 граммов и хлеб 40 граммов.")
+        compose.onNodeWithContentDescription("Отправить").performClick()
+        compose.waitUntil(100_000) { !vm.state.busy }
+        assertNull(vm.state.error)
+        assertTrue(vm.state.messages.last().text,vm.state.messages.last().text.startsWith("ИИ · Nemotron"))
+        assertEquals(247.0,Nutrition.totals(vm.state.pending!!.items).kcal,.001)
+        compose.onNodeWithText("Сохранить в дневник").performScrollTo().performClick()
+        compose.waitUntil(15_000) { !vm.state.busy && vm.state.pending==null }
+        assertEquals(247.0,Nutrition.totals(vm.state.entries.flatMap { it.items }).kcal,.001)
+        scenario.onActivity { vm.send("Сколько калорий осталось на сегодня? Не предлагай продукты, только ответь.",null) }
+        compose.waitUntil(100_000) { !vm.state.busy }
+        assertTrue(vm.state.messages.last().text,vm.state.messages.last().text.startsWith("ИИ · Nemotron"))
+        assertNull(vm.state.pending)
+        assertEquals(1,vm.state.entries.size)
+    }
+    @Test fun unavailableAiFallsBackToLocalCalculatorWithoutLosingTheMeal() {
+        Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("liveOpenRouter")!="true")
+        setupProfile()
+        lateinit var vm: NutriViewModel
+        scenario.onActivity { activity ->
+            vm=androidx.lifecycle.ViewModelProvider(activity)[NutriViewModel::class.java]
+            vm.enableAi(true)
+        }
+        compose.waitUntil(15_000) { !vm.state.busy && vm.state.aiEnabled }
+        scenario.onActivity { vm.send("борщ 300 г, хлеб 40 г",null) }
+        compose.waitUntil(100_000) { !vm.state.busy }
+        assertTrue(vm.state.messages.last().text,vm.state.messages.last().text.contains("Локальный помощник:"))
+        assertEquals(247.0,Nutrition.totals(vm.state.pending!!.items).kcal,.001)
+        scenario.onActivity { vm.saveEntry(vm.state.pending!!) }
+        compose.waitUntil(15_000) { !vm.state.busy && vm.state.pending==null }
+        assertEquals(247.0,vm.state.entries.single().totals.kcal,.001)
+    }
+    @Test fun replacementKeyIsEncryptedAndModeSurvivesReopening() {
+        val testKey="sk-or-v1-"+"test".repeat(12)
+        AiSettings(context).replaceKey(testKey)
+        val reopened=AiSettings(context)
+        assertEquals(testKey,reopened.apiKey())
+        assertTrue(reopened.enabled())
+        assertFalse(context.getSharedPreferences("nutriai_ai",Context.MODE_PRIVATE).getString("key","")!!.contains(testKey))
+        reopened.enable(false)
+        assertFalse(AiSettings(context).enabled())
+    }
     @Test fun offlineDiarySurvivesColdRestartAndCanBeDeleted() {
-        assertEquals(PackageManager.PERMISSION_DENIED,context.packageManager.checkPermission(Manifest.permission.INTERNET,context.packageName))
+        assertFalse(AiSettings(context).enabled())
         setupProfile()
         compose.onNodeWithText("Что вы ели?").performTextInput("борщ 300 г, хлеб 40 г")
         compose.onNodeWithContentDescription("Отправить").performClick()

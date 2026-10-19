@@ -26,6 +26,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -218,8 +219,10 @@ private fun AgentPage(vm: NutriViewModel) {
         LazyColumn(Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp), state = listState, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { DateControl(vm) }
             item { Text("Здравствуйте, ${state.profile?.name}", style = MaterialTheme.typography.titleMedium) }
-            item { Text("Всё на телефоне · без интернета", style = MaterialTheme.typography.labelLarge) }
-            item { ChatBubble("Опишите еду: «борщ 300 г, хлеб 40 г» или выберите продукт в справочнике. Фото — только вложение, блюдо нужно указать текстом. Расчёт работает локально.", false) }
+            item { Text(if(state.aiEnabled) "ИИ через интернет · дневник на телефоне" else "Локальный помощник · без интернета", style = MaterialTheme.typography.labelLarge) }
+            item { ChatBubble(if(state.aiEnabled) "Расскажите, что съели, или спросите, что приготовить. ИИ разберёт описание, приложение рассчитает КБЖУ. Текст чата и суточный баланс отправляются в OpenRouter; фото остаются на телефоне. Запись сохраняется только после подтверждения."
+                else "Опишите еду: «борщ 300 г, хлеб 40 г» или выберите продукт в справочнике. Фото — только вложение, блюдо нужно указать текстом. Расчёт работает локально. ИИ через интернет можно включить в настройках.", false) }
+            if(state.busy) item { Text(if(state.aiEnabled) "ИИ обрабатывает сообщение…" else "Обрабатываю…",style=MaterialTheme.typography.bodySmall) }
             items(state.messages) { message ->
                 Column { message.photoPath?.let { LocalPhoto(it, "Фото блюда в чате", Modifier.fillMaxWidth().height(160.dp)) };ChatBubble(message.text,message.is_user) }
             }
@@ -371,19 +374,32 @@ private fun ProfilePage(vm: NutriViewModel, edit: () -> Unit, settings: () -> Un
 private fun SettingsPage(vm: NutriViewModel, back: () -> Unit) {
     var info by remember { mutableStateOf(false) }
     var erase by remember { mutableStateOf(false) }
+    var keyDialog by remember { mutableStateOf(false) }
+    var key by remember { mutableStateOf("") }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { it?.let(vm::export) }
     Scaffold(topBar = { NutriTopBar("Настройки", onBack = back) }) { padding ->
-        Column(Modifier.padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("NutriAI 2.0 · автономная версия",style=MaterialTheme.typography.titleMedium)
-            Text("Профиль, дневник и фотографии хранятся только на этом телефоне. Аккаунт и интернет не нужны.")
+        Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("NutriAI 2.1 · ИИ и локальный дневник",style=MaterialTheme.typography.titleMedium)
+            Text("Дневник и фотографии хранятся на телефоне. ИИ подключается к OpenRouter напрямую; собственный сервер не нужен.")
+            Row(verticalAlignment=Alignment.CenterVertically) {
+                Text("ИИ через интернет",Modifier.weight(1f))
+                Switch(checked=vm.state.aiEnabled,onCheckedChange=vm::enableAi,enabled=!vm.state.busy)
+            }
+            Text("Nemotron 3 Super · free",style=MaterialTheme.typography.labelLarge)
+            Text(if(vm.state.aiConfigured) "Ключ настроен" else "Для ИИ добавьте ключ OpenRouter",style=MaterialTheme.typography.bodySmall)
+            Text("В OpenRouter отправляются текст запроса, последние 6 сообщений и суточные суммы КБЖУ. Фото, имя и параметры тела из профиля не отправляются. Бесплатная модель может быть перегружена; при ошибке включается локальный разбор еды.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton({ key="";keyDialog=true },enabled=!vm.state.busy) { Text("Заменить ключ OpenRouter") }
             TextButton({ info = true }) { Text("Как работает приложение") }
             OutlinedButton({ export.launch("nutriai-${vm.state.date}.csv") }, enabled = !vm.state.busy) { Text("Экспорт последних 7 дней в CSV") }
             Text("Сохраняйте CSV перед удалением приложения: данные не синхронизируются с облаком.",style=MaterialTheme.typography.bodySmall)
             OutlinedButton({ erase=true },enabled=!vm.state.busy) { Text("Стереть все данные") }
         }
     }
-    if(info) AlertDialog(onDismissRequest = { info = false }, title = { Text("Всё локально") }, text = {
-        Text("КБЖУ рассчитываются по встроенному справочнику или введённым вручную значениям. Это приблизительная оценка. Рекомендации составляются по остатку калорий и БЖУ. Фото сохраняются как вложения: автоматического распознавания блюд по фото нет. Голос работает только при наличии локального распознавателя и русского языкового пакета Android; при их отсутствии используйте текст. Приложение не имеет разрешения на доступ в интернет.")
+    if(keyDialog) AlertDialog(onDismissRequest={ key="";keyDialog=false },title={ Text("Ключ OpenRouter") },text={
+        OutlinedTextField(key,{ key=it },label={ Text("Новый API-ключ") },visualTransformation=PasswordVisualTransformation(),singleLine=true)
+    },confirmButton={ TextButton({ vm.replaceAiKey(key);key="";keyDialog=false },enabled=key.trim().matches(Regex("sk-or-[A-Za-z0-9_-]{20,}"))) { Text("Сохранить ключ") } },dismissButton={ TextButton({ key="";keyDialog=false }) { Text("Отмена") } })
+    if(info) AlertDialog(onDismissRequest = { info = false }, title = { Text("Как работает NutriAI") }, text = {
+        Text("ИИ разбирает описание еды и подбирает порции. Для знакомых продуктов КБЖУ берутся из встроенного справочника; для новых блюд используются явно отмеченные приблизительные оценки ИИ. Арифметика выполняется в приложении. Всегда проверяйте порции. Без интернета доступны дневник, справочник, ручной ввод, аналитика, CSV и локальные рекомендации. Фото — вложения, без распознавания. Голос требует локального распознавателя и русского языкового пакета Android.")
     }, confirmButton = { TextButton({ info = false }) { Text("Понятно") } })
     if(erase) AlertDialog(onDismissRequest={ erase=false },title={ Text("Стереть все данные?") },text={ Text("Будут удалены профиль, записи, история чата и фотографии. Сначала сохраните CSV, если хотите оставить дневник.") },
         confirmButton={ TextButton({ erase=false;vm.erase() }) { Text("Стереть") } },dismissButton={ TextButton({ erase=false }) { Text("Отмена") } })

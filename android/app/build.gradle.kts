@@ -1,9 +1,17 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val openRouterProperties = Properties().apply {
+    rootProject.file("openrouter.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+val openRouterKey = System.getenv("OPENROUTER_API_KEY") ?: openRouterProperties.getProperty("apiKey", "")
+require(openRouterKey.isEmpty() || openRouterKey.matches(Regex("[A-Za-z0-9_-]+"))) { "Invalid OpenRouter key format" }
 
 android {
     namespace = "com.nutriai.mvp"
@@ -14,8 +22,9 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        versionCode = 2
-        versionName = "2.0.0-local"
+        versionCode = 3
+        versionName = "2.1.0-ai"
+        buildConfigField("String", "OPENROUTER_API_KEY", "\"$openRouterKey\"")
     }
 
     buildTypes {

@@ -42,6 +42,7 @@ data class AppState(
     val entries: List<Entry> = emptyList(), val messages: List<Message> = emptyList(),
     val weekly: List<DayStats> = emptyList(), val recommendations: List<Recommendation> = emptyList(),
     val pending: Entry? = null,
+    val aiEnabled: Boolean = false, val aiConfigured: Boolean = false,
 )
 val goals = linkedMapOf("lose" to "Похудение", "maintain" to "Поддержание формы", "gain" to "Набор массы")
 val activities = linkedMapOf("low" to "Мало двигаюсь", "moderate" to "1–3 тренировки в неделю", "high" to "Ежедневный спорт")

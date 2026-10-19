@@ -21,6 +21,7 @@ import java.util.UUID
 
 class NutriViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = Repository(application)
+    private val aiSettings = AiSettings(application)
     var state by mutableStateOf(AppState(busy=true))
         private set
     init {
@@ -52,9 +53,12 @@ class NutriViewModel(application: Application) : AndroidViewModel(application) {
             Snapshot(profile,entries,repository.messages(day),weekly,Nutrition.recommendations(profile,Nutrition.totals(entries.flatMap { it.items })),day.toString()) to repository.pending()
         }
         val (snapshot,pending)=data
-        state=state.copy(profile=snapshot.profile,entries=snapshot.entries,messages=snapshot.messages,weekly=snapshot.weekly,recommendations=snapshot.recommendations,pending=pending)
+        val ai = withContext(Dispatchers.IO) { aiSettings.enabled() to aiSettings.apiKey().isNotBlank() }
+        state=state.copy(profile=snapshot.profile,entries=snapshot.entries,messages=snapshot.messages,weekly=snapshot.weekly,recommendations=snapshot.recommendations,pending=pending,aiEnabled=ai.first,aiConfigured=ai.second)
     }
     fun refresh()=run { load() }
+    fun enableAi(enabled: Boolean)=run { withContext(Dispatchers.IO) { aiSettings.enable(enabled) };load() }
+    fun replaceAiKey(key: String)=run { withContext(Dispatchers.IO) { aiSettings.replaceKey(key) };load() }
     fun saveProfile(profile: Profile, onSaved: () -> Unit = {})=run { withContext(Dispatchers.IO) { repository.saveProfile(profile) };load();onSaved() }
     fun selectDate(date: LocalDate) {
         if(state.busy || date==state.date) return
@@ -90,8 +94,18 @@ class NutriViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun send(text: String, uri: Uri?)=run {
         require(text.isNotBlank() || uri!=null) { "Добавьте описание еды" }
+        require(text.length<=4000) { "Сократите сообщение до 4000 символов" }
         val photo=uri?.let { savePhoto(it) }
-        val result=if(text.isBlank()) AgentResult("Фото сохранено только на телефоне. Автоматического распознавания фото в этой версии нет. Напишите название блюда и массу или выберите продукт в справочнике.") else Nutrition.parse(text)
+        val result=if(text.isBlank()) AgentResult("Фото сохранено только на телефоне. Автоматического распознавания фото в этой версии нет. Напишите название блюда и массу или выберите продукт в справочнике.")
+        else if(state.aiEnabled) {
+            withContext(Dispatchers.IO) {
+                try { OpenRouterAgent(aiSettings.apiKey()).respond(text,state.messages,requireNotNull(state.profile),state.entries) }
+                catch(e: AgentUnavailable) {
+                    val fallback=Nutrition.parse(text)
+                    fallback.copy(reply="${e.message}\nЛокальный помощник: ${fallback.reply}")
+                }
+            }
+        } else Nutrition.parse(text)
         val reply=if(photo!=null && result.items.isNotEmpty()) result.reply+" Фото прикреплено как иллюстрация, расчёт сделан по тексту." else result.reply
         withContext(Dispatchers.IO) {
             repository.saveConversation(state.date,Message(true,text.ifBlank { "Фото блюда" },photo),Message(false,reply),
@@ -110,7 +124,7 @@ class NutriViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun erase()=run {
-        withContext(Dispatchers.IO) { repository.erase() }
+        withContext(Dispatchers.IO) { repository.erase();aiSettings.clear() }
         state=AppState(busy=true)
         load()
     }
