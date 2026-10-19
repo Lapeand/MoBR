@@ -30,7 +30,7 @@ data class Message(val is_user: Boolean, val text: String, val photoPath: String
 @Serializable
 data class AgentResult(val reply: String, val items: List<FoodItem> = emptyList())
 @Serializable
-data class DayStats(val date: String, val totals: Nutrients)
+data class DayStats(val date: String, val totals: Nutrients, val entryCount: Int = 0)
 @Serializable
 data class Recommendation(val title: String, val meal: String, val description: String, val items: List<FoodItem>, val totals: Nutrients)
 @Serializable

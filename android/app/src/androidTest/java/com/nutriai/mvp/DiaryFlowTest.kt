@@ -92,6 +92,61 @@ class DiaryFlowTest {
         reopened.enable(false)
         assertFalse(AiSettings(context).enabled())
     }
+    private fun chartScreenshot(name: String) {
+        if(InstrumentationRegistry.getArguments().getString("captureCharts")!="true") return
+        compose.waitForIdle()
+        val descriptor=InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("screencap -p /data/local/tmp/nutriai-$name.png")
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.readBytes() }
+    }
+    @Test fun chartsReflectDiaryAndShowMissingDaysWithoutInventedValues() {
+        setupProfile()
+        val today=LocalDate.now()
+        Repository(context).use { db ->
+            db.saveEntry(Entry(date=today.toString(),meal="Обед",items=listOf(Nutrition.foods.first { it.name=="Борщ" }.portion(300.0))))
+            db.saveEntry(Entry(date=today.toString(),meal="Перекус",items=listOf(Nutrition.foods.first { it.name=="Хлеб" }.portion(40.0))))
+            db.saveEntry(Entry(date=today.minusDays(1).toString(),meal="Завтрак",items=listOf(Nutrition.foods.first { it.name=="Банан" }.portion(100.0))))
+            (2L..6L).forEach { offset ->
+                db.saveEntry(Entry(date=today.minusDays(offset).toString(),meal="Обед",items=listOf(Nutrition.foods.first { it.name=="Плов" }.portion(300.0+offset*80))))
+            }
+        }
+        lateinit var vm: NutriViewModel
+        scenario.onActivity { activity ->
+            vm=androidx.lifecycle.ViewModelProvider(activity)[NutriViewModel::class.java]
+            vm.refresh()
+        }
+        compose.waitUntil(15_000) { !vm.state.busy && vm.state.entries.size==2 }
+        compose.onNode(hasText("Аналитика") and hasClickAction()).performClick()
+        awaitText("247 / 2370 ккал")
+        chartScreenshot("charts-day")
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Распределение БЖУ"))
+        compose.onNodeWithContentDescription("Круговая диаграмма БЖУ: ${Nutrition.totals(vm.state.entries.flatMap { it.items }).label()}").assertExists()
+        chartScreenshot("charts-donut")
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("По приёмам пищи"))
+        compose.onAllNodesWithText("147 ккал · 60%").onFirst().assertExists()
+        compose.onAllNodesWithText("100 ккал · 40%").onFirst().assertExists()
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        compose.onNodeWithText("За неделю").performClick()
+        awaitText("Итоги за 7 дней")
+        compose.onNodeWithText("Дней с записями: 7 из 7").assertExists()
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Калории по дням"))
+        val yesterday=today.minusDays(1).format(java.time.format.DateTimeFormatter.ofPattern("dd.MM"))
+        compose.onNodeWithContentDescription("Калории $yesterday: 89 ккал").performClick()
+        compose.onNodeWithText("$yesterday · 89 ккал").assertExists()
+        chartScreenshot("charts-week")
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("БЖУ по дням"))
+        val todayLabel=today.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM"))
+        compose.onNodeWithContentDescription("БЖУ $todayLabel: 252 ккал из БЖУ").assertExists()
+        chartScreenshot("charts-week-macros")
+        scenario.onActivity { vm.selectDate(today.minusDays(10)) }
+        compose.waitUntil(15_000) { !vm.state.busy && vm.state.date==today.minusDays(10) }
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        awaitText("Дней с записями: 0 из 7")
+        compose.onNodeWithText("Среднее появится после первой записи").assertExists()
+        compose.onNodeWithText("За день").performClick()
+        awaitText("0 / 2370 ккал")
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Распределение БЖУ"))
+        compose.onNodeWithContentDescription("Нет данных для диаграммы БЖУ").assertExists()
+    }
     @Test fun offlineDiarySurvivesColdRestartAndCanBeDeleted() {
         assertFalse(AiSettings(context).enabled())
         setupProfile()

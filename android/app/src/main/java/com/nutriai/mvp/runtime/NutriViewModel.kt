@@ -49,7 +49,11 @@ class NutriViewModel(application: Application) : AndroidViewModel(application) {
             val profile=repository.profile()
             val week=repository.entries(day.minusDays(6),day)
             val entries=week.filter { it.date==day.toString() }
-            val weekly=(0..6).map { n -> val d=day.minusDays(6L-n); DayStats(d.toString(),Nutrition.totals(week.filter { it.date==d.toString() }.flatMap { it.items })) }
+            val weekly=(0..6).map { n ->
+                val d=day.minusDays(6L-n)
+                val records=week.filter { it.date==d.toString() }
+                DayStats(d.toString(),Nutrition.totals(records.flatMap { it.items }),records.size)
+            }
             Snapshot(profile,entries,repository.messages(day),weekly,Nutrition.recommendations(profile,Nutrition.totals(entries.flatMap { it.items })),day.toString()) to repository.pending()
         }
         val (snapshot,pending)=data

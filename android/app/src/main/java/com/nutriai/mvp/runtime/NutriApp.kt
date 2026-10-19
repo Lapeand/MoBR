@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,8 +21,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -290,40 +287,28 @@ private fun ManualEntry(date: LocalDate, done: (Entry) -> Unit, cancel: () -> Un
 @Composable
 private fun AnalyticsPage(vm: NutriViewModel) {
     val state = vm.state
-    val total = Nutrients(state.entries.sumOf { it.totals.kcal }, state.entries.sumOf { it.totals.protein }, state.entries.sumOf { it.totals.fat }, state.entries.sumOf { it.totals.carbs })
-    val target = state.profile?.targets?.kcal ?: 1.0
-    val color = MaterialTheme.colorScheme.primary
+    val total = Nutrition.totals(state.entries.flatMap { it.items })
+    val targets = state.profile?.targets ?: Nutrients()
+    var weekly by rememberSaveable { mutableStateOf(false) }
     var delete by remember { mutableStateOf<Entry?>(null) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Text("Аналитика", style = MaterialTheme.typography.headlineSmall); DateControl(vm) }
-        item { Card { Column(Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("${total.kcal.roundToInt()} / ${target.roundToInt()} ккал", style = MaterialTheme.typography.headlineSmall)
-            LinearProgressIndicator(progress = { (total.kcal / target.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp))
-            Text(total.label()); Text("Норма: ${state.profile?.targets?.label()}", style = MaterialTheme.typography.bodySmall)
-        } } }
-        item { Text("Последние 7 дней", style = MaterialTheme.typography.titleMedium) }
-        item {
-            Canvas(Modifier.fillMaxWidth().height(140.dp)) {
-                val max = state.weekly.maxOfOrNull { it.totals.kcal }?.coerceAtLeast(1.0) ?: 1.0
-                val width = size.width / 14
-                state.weekly.forEachIndexed { i, day ->
-                    val height = (day.totals.kcal / max * size.height).toFloat()
-                    drawRect(color, Offset(i * width * 2 + width / 2, size.height-height), Size(width, height))
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                state.weekly.forEach { Text(LocalDate.parse(it.date).format(DateTimeFormatter.ofPattern("dd.MM")), style = MaterialTheme.typography.labelSmall) }
-            }
+        item { Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected=!weekly,onClick={ weekly=false },label={ Text("За день") })
+            FilterChip(selected=weekly,onClick={ weekly=true },label={ Text("За неделю") })
+        } }
+        if(weekly) {
+            item { WeekSummaryCard(state.weekly) }
+            item { WeeklyBarsCard(state.weekly,targets.kcal) }
+            item { WeeklyBarsCard(state.weekly,targets.kcal,macros=true) }
+        } else {
+            item { DailyGoalCard(total,targets,state.entries.isNotEmpty()) }
+            item { MacroDonutCard(total) }
+            item { CalorieBreakdownCard("По приёмам пищи",AnalyticsData.meals(state.entries),total.kcal) }
+            item { CalorieBreakdownCard("Продукты по калорийности",AnalyticsData.foods(state.entries),total.kcal,maxRows=5) }
         }
-        item { Text("Баланс БЖУ по калориям", style = MaterialTheme.typography.titleMedium)
-            val energies = listOf(total.protein*4, total.fat*9, total.carbs*4)
-            val sum = energies.sum().coerceAtLeast(1.0)
-            listOf("Белки", "Жиры", "Углеводы").forEachIndexed { i, label ->
-                Text("$label · ${(energies[i]/sum*100).roundToInt()}%")
-                LinearProgressIndicator(progress = { (energies[i]/sum).toFloat() }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
-            }
-        }
-        item { Text("Дневник", style = MaterialTheme.typography.titleMedium) }
+        item { Text("Дневник", style = MaterialTheme.typography.titleMedium)
+            Text("Записи за ${state.date.format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))}",style=MaterialTheme.typography.bodySmall) }
         if(state.entries.isEmpty()) item { Text("За этот день записей пока нет. Добавьте еду во вкладке «Агент».") }
         items(state.entries, key = { it.id }) { entry -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(entry.meal, style = MaterialTheme.typography.titleMedium)
@@ -379,7 +364,7 @@ private fun SettingsPage(vm: NutriViewModel, back: () -> Unit) {
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { it?.let(vm::export) }
     Scaffold(topBar = { NutriTopBar("Настройки", onBack = back) }) { padding ->
         Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("NutriAI 2.1 · ИИ и локальный дневник",style=MaterialTheme.typography.titleMedium)
+            Text("NutriAI 2.2 · ИИ и аналитика",style=MaterialTheme.typography.titleMedium)
             Text("Дневник и фотографии хранятся на телефоне. ИИ подключается к OpenRouter напрямую; собственный сервер не нужен.")
             Row(verticalAlignment=Alignment.CenterVertically) {
                 Text("ИИ через интернет",Modifier.weight(1f))
