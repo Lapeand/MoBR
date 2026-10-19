@@ -2,6 +2,10 @@ package com.nutriai.mvp.runtime
 
 import android.app.Application
 import android.net.Uri
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,119 +16,103 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
 import java.time.LocalDate
+import java.io.File
+import java.util.UUID
 
 class NutriViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = Repository(application)
-    var state by mutableStateOf(AppState(signedIn = repository.hasSession))
+    var state by mutableStateOf(AppState(busy=true))
         private set
-    var baseUrl by mutableStateOf(repository.baseUrl)
-        private set
-    fun changeServer(value: String) {
-        if(state.busy || state.signedIn) return
-        try {
-            repository.changeServer(value)
-            baseUrl = repository.baseUrl
-            state = AppState()
-        } catch(e: IllegalArgumentException) { reportError(e.message ?: "Неверный адрес API") }
-    }
     init {
-        repository.cached()?.takeIf { repository.hasSession }?.let {
-            state = state.copy(profile = it.profile, entries = it.entries, messages = it.messages,
-                weekly = it.weekly, recommendations = it.recommendations, date = LocalDate.parse(it.date), offline = true)
+        viewModelScope.launch {
+            try { withContext(Dispatchers.IO) { repository.initialize() }; load() }
+            catch(e: Exception) { state=state.copy(error="Не удалось открыть локальную базу. ${e.message.orEmpty()}") }
+            finally { state=state.copy(busy=false) }
         }
-        if (repository.hasSession) refresh()
     }
-    fun dismissError() { state = state.copy(error = null) }
-    fun reportError(message: String) { state = state.copy(error = message) }
+    fun dismissError() { state=state.copy(error=null) }
+    fun reportError(message: String) { state=state.copy(error=message) }
     private fun run(action: suspend () -> Unit) {
-        if (state.busy) return
-        state = state.copy(busy = true, error = null)
+        if(state.busy) return
+        state=state.copy(busy=true,error=null)
         viewModelScope.launch {
             try { action() }
-            catch (e: CancellationException) { throw e }
-            catch (e: Exception) {
-                state = if (!repository.hasSession) AppState(error = errorMessage(e)) else state.copy(error = errorMessage(e), offline = e is java.io.IOException)
-            } finally { state = state.copy(busy = false) }
+            catch(e: CancellationException) { throw e }
+            catch(e: Exception) { state=state.copy(error=e.message ?: "Не удалось сохранить данные на телефоне. Проверьте свободное место.") }
+            finally { state=state.copy(busy=false) }
         }
     }
     private suspend fun load() {
-        val api = repository.api
-        val profile = repository.authorized { api.profile() }
-        // Keep the authenticated profile if a later request fails.
-        state = state.copy(signedIn = true, profile = profile)
-        val day = state.date.toString()
-        val entries = repository.authorized { api.diary(day, day) }
-        val messages = repository.authorized { api.chat() }
-        val weekly = repository.authorized { api.weekly(day) }
-        val recommendations = repository.authorized { api.recommendations(day) }
-        state = state.copy(entries = entries, messages = messages, weekly = weekly, recommendations = recommendations, offline = false)
-        repository.cache(Snapshot(profile, entries, messages, weekly, recommendations, day))
+        val day=state.date
+        val data=withContext(Dispatchers.IO) {
+            val profile=repository.profile()
+            val week=repository.entries(day.minusDays(6),day)
+            val entries=week.filter { it.date==day.toString() }
+            val weekly=(0..6).map { n -> val d=day.minusDays(6L-n); DayStats(d.toString(),Nutrition.totals(week.filter { it.date==d.toString() }.flatMap { it.items })) }
+            Snapshot(profile,entries,repository.messages(day),weekly,Nutrition.recommendations(profile,Nutrition.totals(entries.flatMap { it.items })),day.toString()) to repository.pending()
+        }
+        val (snapshot,pending)=data
+        state=state.copy(profile=snapshot.profile,entries=snapshot.entries,messages=snapshot.messages,weekly=snapshot.weekly,recommendations=snapshot.recommendations,pending=pending)
     }
-    fun refresh() = run { load() }
-    fun authenticate(register: Boolean, email: String, password: String, name: String) = run {
-        repository.authenticate(register, Credentials(email.trim(), password, name.trim().ifEmpty { "Пользователь" }))
-        state = AppState(signedIn = true, busy = true)
-        load()
-    }
-    fun saveProfile(profile: Profile) = run {
-        val saved = repository.authorized { repository.api.profile(profile) }
-        state = state.copy(profile = saved)
-        load()
-    }
+    fun refresh()=run { load() }
+    fun saveProfile(profile: Profile, onSaved: () -> Unit = {})=run { withContext(Dispatchers.IO) { repository.saveProfile(profile) };load();onSaved() }
     fun selectDate(date: LocalDate) {
-        if (state.busy || date == state.date) return
-        state = state.copy(date = date, entries = emptyList(), weekly = emptyList(), recommendations = emptyList(), pending = null)
+        if(state.busy || date==state.date) return
+        state=state.copy(date=date,entries=emptyList(),weekly=emptyList(),recommendations=emptyList())
         refresh()
     }
-    fun send(text: String, uri: Uri?) = run {
-        val bytes = uri?.let { withContext(Dispatchers.IO) {
-            getApplication<Application>().contentResolver.openInputStream(it)?.use { input ->
-                val output = java.io.ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (output.size() <= 8 * 1024 * 1024) {
-                    val count = input.read(buffer)
-                    if (count == -1) break
-                    output.write(buffer, 0, count)
-                }
-                val data = output.toByteArray()
-                require(data.size <= 8 * 1024 * 1024) { "Фото больше 8 МБ" }
-                data
-            } ?: error("Не удалось прочитать фото")
+    private suspend fun savePhoto(uri: Uri): String = withContext(Dispatchers.IO) {
+        val context=getApplication<Application>()
+        val resolver=context.contentResolver
+        val options=BitmapFactory.Options().apply { inJustDecodeBounds=true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,options) }
+        require(options.outWidth>0 && options.outHeight>0) { "Выберите поддерживаемую фотографию" }
+        var sample=1
+        while(options.outWidth/sample>1600 || options.outHeight/sample>1600) sample*=2
+        val bitmap=resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it,null,BitmapFactory.Options().apply { inSampleSize=sample }) }
+            ?: error("Не удалось прочитать фото")
+        val orientation=runCatching { resolver.openInputStream(uri)?.use { ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION,ExifInterface.ORIENTATION_NORMAL) } }.getOrNull()
+        val matrix=Matrix().apply { when(orientation) {
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f,1f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f,-1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { setRotate(90f);postScale(-1f,1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { setRotate(270f);postScale(-1f,1f) }
+            ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(270f)
         } }
-        val imageId = bytes?.let { repository.upload(it) }
-        val result = repository.authorized { repository.api.agent(AgentRequest(text, imageId, state.date.toString())) }
-        state = state.copy(messages = state.messages + Message(true, text.ifBlank { "[Фото блюда]" }) + Message(false, result.reply),
-            pending = result.items.takeIf { it.isNotEmpty() }?.let { Entry(date = state.date.toString(), items = it) })
-        load()
+        val upright=if(matrix.isIdentity) bitmap else Bitmap.createBitmap(bitmap,0,0,bitmap.width,bitmap.height,matrix,true)
+        val dir=File(context.filesDir,"meal_photos").apply { mkdirs() }
+        val file=File(dir,UUID.randomUUID().toString()+".jpg")
+        try { file.outputStream().use { check(upright.compress(Bitmap.CompressFormat.JPEG,85,it)) };file.absolutePath }
+        catch(e: Exception) { file.delete();throw e }
+        finally { if(upright!==bitmap) upright.recycle();bitmap.recycle() }
     }
-    fun propose(entry: Entry) { if (!state.busy) state = state.copy(pending = entry) }
-    fun cancelPending() { if (!state.busy) state = state.copy(pending = null) }
-    fun saveEntry(entry: Entry) = run {
-        repository.authorized { repository.api.save(entry) }
-        state = state.copy(pending = null)
-        load()
-    }
-    fun deleteEntry(id: String) = run {
-        repository.authorized { repository.api.delete(id) }
-        load()
-    }
-    fun barcode(code: String) = run {
-        val food = repository.authorized { repository.api.barcode(code) }
-        state = state.copy(pending = Entry(date = state.date.toString(), items = listOf(food)))
-    }
-    fun export(uri: Uri) = run {
-        val csv = repository.authorized { repository.api.export(state.date.minusDays(6).toString(), state.date.toString()).bytes() }
+    fun send(text: String, uri: Uri?)=run {
+        require(text.isNotBlank() || uri!=null) { "Добавьте описание еды" }
+        val photo=uri?.let { savePhoto(it) }
+        val result=if(text.isBlank()) AgentResult("Фото сохранено только на телефоне. Автоматического распознавания фото в этой версии нет. Напишите название блюда и массу или выберите продукт в справочнике.") else Nutrition.parse(text)
+        val reply=if(photo!=null && result.items.isNotEmpty()) result.reply+" Фото прикреплено как иллюстрация, расчёт сделан по тексту." else result.reply
         withContext(Dispatchers.IO) {
-            getApplication<Application>().contentResolver.openOutputStream(uri)?.use { it.write(csv) } ?: error("Не удалось создать файл")
+            repository.saveConversation(state.date,Message(true,text.ifBlank { "Фото блюда" },photo),Message(false,reply),
+                result.items.takeIf { it.isNotEmpty() }?.let { Entry(date=state.date.toString(),items=it,photoPath=photo) })
+        }
+        load()
+    }
+    fun propose(entry: Entry)=run { withContext(Dispatchers.IO) { repository.pending(entry) };load() }
+    fun cancelPending()=run { withContext(Dispatchers.IO) { repository.pending(null) };load() }
+    fun saveEntry(entry: Entry)=run { withContext(Dispatchers.IO) { repository.confirm(entry) };load() }
+    fun deleteEntry(id: String)=run { withContext(Dispatchers.IO) { repository.deleteEntry(id) };load() }
+    fun export(uri: Uri)=run {
+        withContext(Dispatchers.IO) {
+            val csv=Nutrition.csv(repository.entries(state.date.minusDays(6),state.date))
+            getApplication<Application>().contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray(Charsets.UTF_8)) } ?: error("Не удалось создать файл")
         }
     }
-    fun demoPlan(premium: Boolean) = run {
-        repository.authorized { repository.api.demoPlan(mapOf("premium" to premium)) }; load()
+    fun erase()=run {
+        withContext(Dispatchers.IO) { repository.erase() }
+        state=AppState(busy=true)
+        load()
     }
-    fun logout() = run {
-        try { repository.logout() } finally {
-            withContext(Dispatchers.IO) { java.io.File(getApplication<Application>().cacheDir, "photos").deleteRecursively() }
-            state = AppState()
-        }
-    }
+    override fun onCleared() { repository.close();super.onCleared() }
 }

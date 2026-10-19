@@ -1,10 +1,7 @@
 package com.nutriai.mvp.runtime
 
 import androidx.activity.compose.BackHandler
-import com.nutriai.mvp.BuildConfig
-import android.content.Intent
 import android.net.Uri
-import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,12 +26,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
-import com.nutriai.mvp.ui.auth.WelcomeScreen
 import com.nutriai.mvp.ui.components.ChatBubble
 import com.nutriai.mvp.ui.components.NutriTopBar
 import java.io.File
@@ -46,16 +40,11 @@ import kotlin.math.roundToInt
 @Composable
 fun NutriApp(vm: NutriViewModel = viewModel()) {
     val state = vm.state
-    var serverDialog by remember { mutableStateOf(false) }
-    var serverUrl by rememberSaveable { mutableStateOf(vm.baseUrl) }
-    var auth by rememberSaveable { mutableStateOf("welcome") }
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val savedTabs = rememberSaveableStateHolder()
     var page by rememberSaveable { mutableStateOf("") }
-    BackHandler(enabled = page.isNotEmpty() || (!state.signedIn && auth != "welcome")) {
-        if(page.isNotEmpty()) page = "" else auth = "welcome"
-    }
-    LaunchedEffect(state.signedIn) { if (!state.signedIn) { page = ""; tab = 0; auth = "welcome" } }
+    BackHandler(enabled = page.isNotEmpty()) { page = "" }
+    LaunchedEffect(state.profile?.onboarded) { if(state.profile?.onboarded == false) { page="";tab=0;(0..2).forEach { savedTabs.removeState(it) } } }
     Scaffold { padding ->
         Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
             if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -67,26 +56,15 @@ fun NutriApp(vm: NutriViewModel = viewModel()) {
                     }
                 }
             }
-            if (state.offline && state.profile != null) {
-                Text("Нет свежих данных — показан сохранённый дневник", Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
-            }
             Box(Modifier.weight(1f)) {
                 when {
-                    !state.signedIn -> when(auth) {
-                        "welcome" -> Box(Modifier.fillMaxSize()) {
-                            WelcomeScreen(onLoginClick = { auth = "login" }, onRegisterClick = { auth = "register" })
-                            TextButton({ serverUrl = vm.baseUrl; serverDialog = true }, modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp), enabled = !state.busy) { Text("Адрес сервера") }
-                        }
-                        else -> AuthPage(auth == "register", state.busy, { auth = "welcome" }, vm::authenticate)
-                    }
                     state.profile == null -> Column(Modifier.padding(24.dp)) {
                         Text("Загружаем профиль…")
                         Button(onClick = vm::refresh, enabled = !state.busy) { Text("Повторить") }
-                        TextButton(onClick = vm::logout, enabled = !state.busy) { Text("Выйти") }
                     }
-                    !state.profile.onboarded -> ProfileEditor(state.profile, true, state.busy, vm::saveProfile)
+                    !state.profile.onboarded -> ProfileEditor(state.profile, true, state.busy, { vm.saveProfile(it) })
                     page == "edit" -> ProfileEditor(state.profile, false, state.busy, {
-                        vm.saveProfile(it)
+                        vm.saveProfile(it) { page = "" }
                     }, { page = "" })
                     page == "settings" -> SettingsPage(vm, { page = "" })
                     else -> Scaffold(bottomBar = {
@@ -109,34 +87,7 @@ fun NutriApp(vm: NutriViewModel = viewModel()) {
             }
         }
     }
-    if(serverDialog) AlertDialog(onDismissRequest = { serverDialog = false }, title = { Text("Подключение к API") }, text = {
-        Column { Field("Адрес сервера", serverUrl, { serverUrl = it }); Text("Эмулятор: http://10.0.2.2:8000/\nТелефон: HTTPS-адрес вашего сервера", style = MaterialTheme.typography.bodySmall) }
-    }, confirmButton = { TextButton({ vm.changeServer(serverUrl); if(vm.state.error == null) serverDialog = false }) { Text("Сохранить") } }, dismissButton = { TextButton({ serverDialog = false }) { Text("Отмена") } })
     state.pending?.let { entry -> ConfirmEntry(entry, state.busy, vm::saveEntry, vm::cancelPending) }
-}
-
-@Composable
-private fun AuthPage(register: Boolean, busy: Boolean, onBack: () -> Unit, submit: (Boolean, String, String, String) -> Unit) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var attempted by rememberSaveable { mutableStateOf(false) }
-    val valid = android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches() && password.length >= 8 && (!register || name.isNotBlank())
-    Scaffold(topBar = { NutriTopBar(if (register) "Регистрация" else "Вход", onBack = onBack) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(if(register) "Новый аккаунт" else "С возвращением", style = MaterialTheme.typography.headlineSmall)
-            Text(if(register) "Создайте профиль NutriAI" else "Войдите, чтобы продолжить дневник")
-            if(register) Field("Имя", name, { name = it })
-            OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(password, { password = it }, label = { Text("Пароль · минимум 8 символов") },
-                singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
-            if(attempted && !valid) Text("Укажите корректный email, пароль от 8 символов и имя.", color = MaterialTheme.colorScheme.error)
-            Button(onClick = { attempted = true; if(valid) submit(register, email, password, name) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Text(if(register) "Зарегистрироваться" else "Войти")
-            }
-        }
-    }
 }
 
 @Composable
@@ -197,7 +148,6 @@ private fun ProfileEditor(profile: Profile, onboarding: Boolean, busy: Boolean, 
                 Text(if(onboarding && step < 2) "Далее" else "Сохранить")
             }
             if(onboarding && step > 0) TextButton(onClick = { step-- }, enabled = !busy) { Text("Назад") }
-            if(!onboarding) Text("После успешного сохранения вернитесь назад — данные обновятся.", style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -222,14 +172,10 @@ private fun AgentPage(vm: NutriViewModel) {
     var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
     var mediaMenu by remember { mutableStateOf(false) }
     var manual by remember { mutableStateOf(false) }
-    var barcode by remember { mutableStateOf(false) }
-    var code by rememberSaveable { mutableStateOf("") }
+    var catalog by remember { mutableStateOf(false) }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { photo = it?.toString() }
     val capture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if(ok) photo = cameraUri }
-    val speech = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { text = it }
-    }
-    // Clear sent composer only after a successful response; preserve it on a network failure.
+    val speech = rememberOfflineSpeech({ text=it },vm::reportError)
     val listState = rememberLazyListState()
     LaunchedEffect(state.messages.size) { if(state.messages.isNotEmpty()) listState.animateScrollToItem(state.messages.size + 1) }
     var sending by remember { mutableStateOf(false) }
@@ -238,12 +184,12 @@ private fun AgentPage(vm: NutriViewModel) {
     }
     Scaffold(topBar = { TopAppBar(title = { Text("NutriAI") }, actions = {
         IconButton({ manual = true }, enabled = !state.busy) { Icon(Icons.Default.Add, "Добавить вручную") }
-        IconButton({ barcode = true }, enabled = !state.busy) { Icon(Icons.Default.QrCode, "Штрихкод продукта") }
+        IconButton({ catalog = true }, enabled = !state.busy) { Icon(Icons.Default.MenuBook, "Справочник продуктов") }
     }) }, bottomBar = {
         Column(Modifier.imePadding()) {
             photo?.let { uri ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(uri, "Фото блюда", Modifier.size(72.dp).padding(8.dp))
+                    LocalPhoto(uri, "Фото блюда", Modifier.size(72.dp).padding(8.dp))
                     TextButton({ photo = null }, enabled = !state.busy) { Text("Убрать фото") }
                 }
             }
@@ -262,10 +208,7 @@ private fun AgentPage(vm: NutriViewModel) {
                     }
                 }
                 OutlinedTextField(text, { text = it }, placeholder = { Text("Что вы ели?") }, modifier = Modifier.weight(1f), maxLines = 3, enabled = !state.busy)
-                IconButton({
-                    try { speech.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM).putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ru-RU")) }
-                    catch(e: Exception) { vm.reportError("Распознавание речи недоступно. Введите текст.") }
-                }, enabled = !state.busy) { Icon(Icons.Default.Mic, "Голос") }
+                IconButton(speech, enabled = !state.busy) { Icon(Icons.Default.Mic, "Голос") }
                 IconButton({ sending = true; vm.send(text, photo?.let(Uri::parse)) }, enabled = !state.busy && (text.isNotBlank() || photo != null)) {
                     Icon(Icons.AutoMirrored.Filled.Send, "Отправить")
                 }
@@ -275,15 +218,16 @@ private fun AgentPage(vm: NutriViewModel) {
         LazyColumn(Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp), state = listState, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item { DateControl(vm) }
             item { Text("Здравствуйте, ${state.profile?.name}", style = MaterialTheme.typography.titleMedium) }
-            item { ChatBubble("Расскажите о еде: «борщ 300 г, хлеб 40 г». Можно голосом или фото. Оценку проверьте перед сохранением.", false) }
-            items(state.messages) { ChatBubble(it.text, it.is_user) }
+            item { Text("Всё на телефоне · без интернета", style = MaterialTheme.typography.labelLarge) }
+            item { ChatBubble("Опишите еду: «борщ 300 г, хлеб 40 г» или выберите продукт в справочнике. Фото — только вложение, блюдо нужно указать текстом. Расчёт работает локально.", false) }
+            items(state.messages) { message ->
+                Column { message.photoPath?.let { LocalPhoto(it, "Фото блюда в чате", Modifier.fillMaxWidth().height(160.dp)) };ChatBubble(message.text,message.is_user) }
+            }
             item { Spacer(Modifier.height(12.dp)) }
         }
     }
     if(manual) ManualEntry(state.date, { vm.propose(it); manual = false }, { manual = false })
-    if(barcode) AlertDialog(onDismissRequest = { barcode = false }, title = { Text("Штрихкод Open Food Facts") }, text = {
-        Field("8–14 цифр", code, { code = it.filter(Char::isDigit) }, true)
-    }, confirmButton = { TextButton({ barcode = false; vm.barcode(code) }, enabled = code.length in 8..14) { Text("Найти") } }, dismissButton = { TextButton({ barcode = false }) { Text("Отмена") } })
+    if(catalog) FoodCatalog({ food -> vm.propose(Entry(date=state.date.toString(),items=listOf(food.portion(food.defaultGrams))));catalog=false }, { catalog=false })
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -295,6 +239,7 @@ private fun ConfirmEntry(entry: Entry, busy: Boolean, save: (Entry) -> Unit, can
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Проверьте запись", style = MaterialTheme.typography.headlineSmall)
             Text(entry.date)
+            entry.photoPath?.let { LocalPhoto(it, "Фото блюда", Modifier.fillMaxWidth().height(150.dp)) }
             Field("Приём пищи", meal, { meal = it })
             items.forEachIndexed { index, food ->
                 Text(food.name, style = MaterialTheme.typography.titleMedium)
@@ -379,6 +324,7 @@ private fun AnalyticsPage(vm: NutriViewModel) {
         if(state.entries.isEmpty()) item { Text("За этот день записей пока нет. Добавьте еду во вкладке «Агент».") }
         items(state.entries, key = { it.id }) { entry -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) {
             Text(entry.meal, style = MaterialTheme.typography.titleMedium)
+            entry.photoPath?.let { LocalPhoto(it, "Фото записи", Modifier.fillMaxWidth().height(140.dp)) }
             entry.items.forEach { Text("${it.name} · ${it.weight_g.roundToInt()} г") }
             Text(entry.totals.label())
             TextButton({ delete = entry }, enabled = !state.busy) { Text("Удалить") }
@@ -386,7 +332,7 @@ private fun AnalyticsPage(vm: NutriViewModel) {
         item { OutlinedButton(vm::refresh, enabled = !state.busy) { Text("Обновить") } }
     }
     delete?.let { entry -> AlertDialog(onDismissRequest = { delete = null }, title = { Text("Удалить запись?") },
-        text = { Text(entry.items.joinToString { it.name }) }, confirmButton = { TextButton({ vm.deleteEntry(entry.id); delete = null }) { Text("Удалить") } },
+        text = { Text(entry.items.joinToString { it.name }) }, confirmButton = { TextButton({ vm.deleteEntry(entry.id); delete = null }) { Text("Да, удалить") } },
         dismissButton = { TextButton({ delete = null }) { Text("Отмена") } }) }
 }
 
@@ -424,20 +370,44 @@ private fun ProfilePage(vm: NutriViewModel, edit: () -> Unit, settings: () -> Un
 @Composable
 private fun SettingsPage(vm: NutriViewModel, back: () -> Unit) {
     var info by remember { mutableStateOf(false) }
+    var erase by remember { mutableStateOf(false) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { it?.let(vm::export) }
     Scaffold(topBar = { NutriTopBar("Настройки", onBack = back) }) { padding ->
         Column(Modifier.padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            TextButton({ info = true }) { Text("Конфиденциальность и о приложении") }
+            Text("NutriAI 2.0 · автономная версия",style=MaterialTheme.typography.titleMedium)
+            Text("Профиль, дневник и фотографии хранятся только на этом телефоне. Аккаунт и интернет не нужны.")
+            TextButton({ info = true }) { Text("Как работает приложение") }
             OutlinedButton({ export.launch("nutriai-${vm.state.date}.csv") }, enabled = !vm.state.busy) { Text("Экспорт последних 7 дней в CSV") }
-            Text("Free: 20 сообщений агента в сутки. Ручной дневник без лимита. Оплата в MVP не подключена.", style = MaterialTheme.typography.bodySmall)
-            if(BuildConfig.DEBUG) {
-                Text("Демо-тариф: ${vm.state.profile?.plan}")
-                TextButton({ vm.demoPlan(vm.state.profile?.plan != "premium") }, enabled = !vm.state.busy) { Text("Переключить Free / Premium (dev-сервер)") }
-            }
-            OutlinedButton(vm::logout, enabled = !vm.state.busy) { Text("Выйти из аккаунта") }
+            Text("Сохраняйте CSV перед удалением приложения: данные не синхронизируются с облаком.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton({ erase=true },enabled=!vm.state.busy) { Text("Стереть все данные") }
         }
     }
-    if(info) AlertDialog(onDismissRequest = { info = false }, title = { Text("NutriAI · учебный проект") }, text = {
-        Text("Профиль и дневник хранятся на сервере, локальная сессия и кэш зашифрованы. Фото и описание еды отправляются ИИ-провайдеру при настроенном ключе; параметры профиля в запрос ИИ не включаются. Голос обрабатывает выбранная служба распознавания Android, которая может использовать сеть. Выход очищает локальный кэш. КБЖУ приблизительны. Для удаления серверных данных обратитесь к администратору развёрнутого сервера.")
+    if(info) AlertDialog(onDismissRequest = { info = false }, title = { Text("Всё локально") }, text = {
+        Text("КБЖУ рассчитываются по встроенному справочнику или введённым вручную значениям. Это приблизительная оценка. Рекомендации составляются по остатку калорий и БЖУ. Фото сохраняются как вложения: автоматического распознавания блюд по фото нет. Голос работает только при наличии локального распознавателя и русского языкового пакета Android; при их отсутствии используйте текст. Приложение не имеет разрешения на доступ в интернет.")
     }, confirmButton = { TextButton({ info = false }) { Text("Понятно") } })
+    if(erase) AlertDialog(onDismissRequest={ erase=false },title={ Text("Стереть все данные?") },text={ Text("Будут удалены профиль, записи, история чата и фотографии. Сначала сохраните CSV, если хотите оставить дневник.") },
+        confirmButton={ TextButton({ erase=false;vm.erase() }) { Text("Стереть") } },dismissButton={ TextButton({ erase=false }) { Text("Отмена") } })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FoodCatalog(select: (LocalFood) -> Unit, close: () -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val found=remember(query) { Nutrition.search(query) }
+    ModalBottomSheet(onDismissRequest=close) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.85f).padding(16.dp)) {
+            Text("Справочник продуктов",style=MaterialTheme.typography.headlineSmall)
+            Text("${Nutrition.foods.size} продуктов и блюд · КБЖУ на 100 г",style=MaterialTheme.typography.bodySmall)
+            Field("Поиск продукта",query,{ query=it })
+            LazyColumn(Modifier.weight(1f)) {
+                if(found.isEmpty()) item { Text("Не нашли продукт? Закройте справочник и добавьте блюдо вручную кнопкой +.",Modifier.padding(16.dp)) }
+                items(found,key={ it.name }) { food ->
+                    TextButton({ select(food) },modifier=Modifier.fillMaxWidth()) {
+                        Column(Modifier.fillMaxWidth()) { Text(food.name);Text(food.nutrients.label(),style=MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            }
+            TextButton(close) { Text("Закрыть") }
+        }
+    }
 }

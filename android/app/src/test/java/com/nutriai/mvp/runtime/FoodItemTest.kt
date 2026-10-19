@@ -14,7 +14,7 @@ class FoodItemTest {
         assertEquals(9.0, scaled.carbs, 0.01)
         assertEquals(food, scaled.scaled(300.0))
     }
-    @Test fun apiEntryContractDecodes() {
+    @Test fun localEntrySurvivesSerialization() {
         val entry = json.decodeFromString<Entry>("""{"id":"one","request_id":"r","date":"2026-10-19","meal":"Обед","items":[{"name":"Борщ","weight_g":300,"kcal":147,"protein":6,"fat":6,"carbs":18}],"totals":{"kcal":147,"protein":6,"fat":6,"carbs":18}}""")
         assertEquals(147.0, entry.totals.kcal, 0.01)
         assertEquals(300.0, entry.items.single().weight_g, 0.01)
