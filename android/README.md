@@ -1,47 +1,15 @@
-# NutriAI — MVP UI (Jetpack Compose)
+# Android NutriAI
 
-Статичные экраны и `@Preview` для защиты ВКР (задание 2). Без API, ViewModel и бизнес-логики.
+Откройте эту папку в Android Studio. Требования: JDK 17, SDK 35, minSdk 26.
 
-Документация проекта: [`../README.md`](../README.md) · план и архитектура: [`../docs/PLAN.md`](../docs/PLAN.md)
+```sh
+./gradlew testDebugUnitTest lintDebug assembleDebug
+```
 
-## Как открыть
+APK: `app/build/outputs/apk/debug/app-debug.apk`.
 
-1. **Android Studio** (Ladybug или новее) → *Open* → **эта папка** (`MobR/android`).
-2. Дождитесь Gradle Sync.
-3. Откройте любой файл экрана (например `ui/main/MainScreen.kt`) и вкладку **Split** / **Design** для превью.
+По умолчанию debug-клиент обращается к локальному API через `http://10.0.2.2:8000/` (Android Emulator). Другой сервер: `-PAPI_BASE_URL=https://your-api.example/`. Для телефона по USB: `adb reverse tcp:8000 tcp:8000` и `-PAPI_BASE_URL=http://127.0.0.1:8000/`.
 
-## Карта превью (имена в Android Studio)
+Рабочие экраны находятся в `runtime/`, общие компоненты и исходные дизайн-превью в `ui/`. Авторизация не имеет встроенных демонстрационных паролей: зарегистрируйте пользователя на своём backend.
 
-| ID | Preview name | Файл |
-|----|----------------|------|
-| S0 | S0 Splash | `ui/splash/SplashScreen.kt` |
-| S1–S3 | Welcome, Login, Register | `ui/auth/AuthScreens.kt` |
-| S4 | Onboarding (3 превью) | `ui/onboarding/OnboardingScreen.kt` |
-| S5 | Main — Agent / Analytics / Profile | `ui/main/MainScreen.kt` |
-| S5a | S5a Agent Tab | `ui/agent/AgentTabScreen.kt` |
-| S5b | S5b Analytics Tab | `ui/analytics/AnalyticsTabScreen.kt` |
-| S5c | S5c Profile Tab | `ui/profile/ProfileScreens.kt` |
-| S6 | Entry Confirm Sheet | `ui/entry/EntryConfirmSheet.kt` |
-| S7–S9 | Edit Profile, Recommendations, Settings | `ui/profile/ProfileScreens.kt` |
-
-Галерея: `ui/preview/NutriAiPreviewGallery.kt`
-
-Mock-данные: `app/src/main/java/com/nutriai/mvp/data/MockData.kt`
-
-## Запуск на устройстве
-
-Сборка из этой папки: `gradlew :app:assembleDebug`
-
-## Навигация на устройстве (demo flow)
-
-1. **Welcome** → «Войти» или «Создать аккаунт»
-2. **Login / Register** → кнопка входа/регистрации (без проверки полей)
-3. **Onboarding** (3 шага) → «Далее» / «Начать» или «Пропустить»
-4. **Main** — вкладки Агент / Аналитика / Профиль
-5. В профиле: настройки, редактирование, «Подробнее» у рекомендаций; **Выйти** возвращает на Welcome
-
-Граф: `ui/navigation/NutriNavHost.kt`
-
-## Стек модуля
-
-Kotlin, Compose BOM, Material 3, Navigation Compose (подключён для следующего этапа).
+Полные инструкции и ограничения: [README репозитория](../README.md).
